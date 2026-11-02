@@ -1,0 +1,107 @@
+{
+  "dataset_id": "fantasyedge-demo-history-v1",
+  "label": "Synthetic demo historical data",
+  "synthetic": true,
+  "source": "demo_historical_fixture",
+  "allow_name_fallback": false,
+  "matches": [
+    {
+      "id": "1f16f05e-e25c-43a1-ba00-331b1d2c3b8a",
+      "fixture_path": "durham_warwickshire_scorecard.json",
+      "synthetic": false,
+      "source": "demo_fixture",
+      "dataset_label": "genuine_fixture",
+      "is_complete_scorecard": true
+    },
+    {
+      "id": "demo-history-2022-06-01",
+      "synthetic": true,
+      "source": "demo_historical_fixture",
+      "dataset_label": "synthetic_demo",
+      "is_complete_scorecard": false,
+      "data": {
+        "id": "demo-history-2022-06-01",
+        "name": "Synthetic Durham vs Warwickshire Match 1",
+        "matchType": "t20",
+        "status": "Synthetic demo result",
+        "venue": "Synthetic Riverside Ground",
+        "date": "2022-06-01",
+        "teams": ["Durham", "Warwickshire"],
+        "score": [
+          {"r": 155, "w": 6, "o": 20, "inning": "Durham Inning 1"},
+          {"r": 148, "w": 8, "o": 20, "inning": "Warwickshire Inning 1"}
+        ],
+        "scorecard": [
+          {
+            "inning": "Durham Inning 1",
+            "batting": [
+              {"batsman": {"id": "cb219a46-2763-47c6-a79d-f0626992cee8", "name": "Ben Raine"}, "dismissal-text": "not out", "r": 62, "b": 42, "4s": 5, "6s": 2, "sr": 147.62},
+              {"batsman": {"id": "27257774-29e0-4822-91fb-b298500b55a3", "name": "Adam Hose"}, "dismissal": "catch", "dismissal-text": "c Synthetic Fielder b Synthetic Bowler", "r": 34, "b": 25, "4s": 3, "6s": 1, "sr": 136}
+            ],
+            "bowling": [
+              {"bowler": {"id": "cb219a46-2763-47c6-a79d-f0626992cee8", "name": "Ben Raine"}, "o": 4, "m": 0, "r": 28, "w": 2}
+            ],
+            "catching": [
+              {"catcher": {"id": "27257774-29e0-4822-91fb-b298500b55a3", "name": "Adam Hose"}, "catch": 1}
+            ]
+          },
+          {
+            "inning": "Warwickshire Inning 1",
+            "batting": [
+              {"batsman": {"id": "demo-player-synthetic-batter", "name": "Synthetic Batter"}, "dismissal-text": "not out", "r": 48, "b": 35, "4s": 4, "6s": 1, "sr": 137.14}
+            ],
+            "bowling": [
+              {"bowler": {"id": "27257774-29e0-4822-91fb-b298500b55a3", "name": "Adam Hose"}, "o": 4, "m": 0, "r": 31, "w": 1}
+            ],
+            "catching": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "demo-history-2022-05-25",
+      "synthetic": true,
+      "source": "demo_historical_fixture",
+      "dataset_label": "synthetic_demo",
+      "is_complete_scorecard": false,
+      "data": {
+        "id": "demo-history-2022-05-25",
+        "name": "Synthetic Warwickshire vs Durham Match 2",
+        "matchType": "t20",
+        "status": "Synthetic demo result",
+        "venue": "Synthetic County Ground",
+        "date": "2022-05-25",
+        "teams": ["Warwickshire", "Durham"],
+        "score": [
+          {"r": 161, "w": 5, "o": 20, "inning": "Warwickshire Inning 1"},
+          {"r": 160, "w": 7, "o": 20, "inning": "Durham Inning 1"}
+        ],
+        "scorecard": [
+          {
+            "inning": "Warwickshire Inning 1",
+            "batting": [
+              {"batsman": {"id": "27257774-29e0-4822-91fb-b298500b55a3", "name": "Adam Hose"}, "dismissal": "catch", "dismissal-text": "c Synthetic Fielder b Synthetic Bowler", "r": 17, "b": 15, "4s": 2, "6s": 0, "sr": 113.33},
+              {"batsman": {"id": "cb219a46-2763-47c6-a79d-f0626992cee8", "name": "Ben Raine"}, "dismissal": "bowled", "dismissal-text": "b Synthetic Bowler", "r": 28, "b": 21, "4s": null, "6s": 1, "sr": 133.33}
+            ],
+            "bowling": [
+              {"bowler": {"id": "cb219a46-2763-47c6-a79d-f0626992cee8", "name": "Ben Raine"}, "o": 3.2, "m": 0, "r": 19, "w": 1}
+            ],
+            "catching": [
+              {"catcher": {"id": "27257774-29e0-4822-91fb-b298500b55a3", "name": "Adam Hose"}, "catch": 2}
+            ]
+          },
+          {
+            "inning": "Durham Inning 1",
+            "batting": [
+              {"batsman": {"id": "demo-player-synthetic-batter", "name": "Synthetic Batter"}, "dismissal-text": "not out", "r": 71, "b": 49, "4s": 6, "6s": 2, "sr": 144.89}
+            ],
+            "bowling": [
+              {"bowler": {"id": "27257774-29e0-4822-91fb-b298500b55a3", "name": "Adam Hose"}, "o": 2, "m": 0, "r": 18, "w": 0}
+            ],
+            "catching": []
+          }
+        ]
+      }
+    }
+  ]
+}
