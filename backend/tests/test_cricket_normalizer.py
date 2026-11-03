@@ -39,6 +39,99 @@ def test_normalize_match_list_preserves_unknown_optional_values():
     assert match["scores"][0]["r"] == 42
 
 
+def test_normalize_matches_response_handles_missing_score_and_team_info():
+    result = normalize_match_list(
+        {
+            "status": "success",
+            "data": [
+                {
+                    "id": "match-2",
+                    "name": "Team C vs Team D",
+                    "matchType": "ODI",
+                    "status": "Match not started",
+                    "date": "2026-11-03",
+                    "teams": ["Team C", "Team D"],
+                    "matchStarted": False,
+                    "matchEnded": False,
+                }
+            ],
+        }
+    )
+    match = result["matches"][0]
+    assert match["id"] == "match-2"
+    assert match["teams"] == ["Team C", "Team D"]
+    assert match["scores"] == []
+
+
+def test_provider_recent_matches_calls_matches_endpoint_and_normalizes_response():
+    requested_paths = []
+
+    async def handler(request):
+        requested_paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "data": [
+                    {
+                        "id": "match-3",
+                        "name": "Team E vs Team F",
+                        "matchType": "T20",
+                        "status": "Team E won",
+                        "date": "2026-11-02",
+                        "teams": ["Team E", "Team F"],
+                        "score": [{"r": 180, "w": 5, "o": 20}],
+                        "teamInfo": [{"name": "Team E", "shortname": "E"}],
+                        "series_id": "series-1",
+                        "fantasyEnabled": True,
+                        "matchStarted": True,
+                        "matchEnded": True,
+                    }
+                ],
+            },
+        )
+
+    provider = CricketDataProvider(
+        api_key="secret",
+        base_url="https://example.test/v1",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    payload = asyncio.run(provider.recent_matches(offset=0))
+    normalized = normalize_match_list(payload)
+
+    assert requested_paths == ["/v1/matches"]
+    assert normalized["matches"][0]["id"] == "match-3"
+    assert normalized["matches"][0]["scores"][0]["r"] == 180
+
+
+def test_provider_matches_endpoint_failure_preserves_diagnostics():
+    async def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "status": "failure",
+                "message": "Invalid API requested",
+                "reason": "invalid_endpoint",
+            },
+        )
+
+    provider = CricketDataProvider(
+        api_key="failure-secret",
+        base_url="https://example.test/v1",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async def run():
+        with pytest.raises(CricketProviderError) as raised:
+            await provider.recent_matches()
+        return raised.value
+
+    error = asyncio.run(run())
+    assert error.code == "CRICKET_PROVIDER_ERROR"
+    assert error.provider_message == "Invalid API requested"
+    assert error.provider_reason == "invalid_endpoint"
+
+
 def test_normalize_scorecard_keeps_provider_scorecard_without_inventing_stats():
     result = normalize_scorecard(
         {
@@ -175,6 +268,7 @@ def test_provider_preserves_http_status_and_json_diagnostics():
     assert error.provider_reason == "quota"
     assert error.safe_detail() == {
         "message": "Cricket Data HTTP request failed",
+        "code": "CRICKET_QUOTA_EXHAUSTED",
         "provider_http_status": 429,
         "provider_status": "failure",
         "provider_message": "daily limit reached",
@@ -221,10 +315,98 @@ def test_provider_caches_successful_responses_without_caching_errors():
     _response_cache.clear()
 
 
+@pytest.mark.parametrize(
+    ("status_code", "payload"),
+    [
+        (429, {"status": "failure", "message": "too many requests"}),
+        (500, {"status": "failure", "message": "server error"}),
+        (200, {"status": "failure", "message": "invalid key", "reason": "auth"}),
+    ],
+)
+def test_provider_non_quota_failures_are_not_classified_as_quota(
+    status_code, payload
+):
+    async def handler(request):
+        return httpx.Response(status_code, json=payload)
+
+    provider = CricketDataProvider(
+        api_key="secret",
+        base_url="https://example.test/v1",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async def run():
+        with pytest.raises(CricketProviderError) as raised:
+            await provider.live_matches()
+        return raised.value
+
+    error = asyncio.run(run())
+    assert error.code != "CRICKET_QUOTA_EXHAUSTED"
+
+
+def test_missing_api_key_is_not_classified_as_quota(monkeypatch):
+    monkeypatch.delenv("CRICKET_DATA_API_KEY", raising=False)
+    provider = CricketDataProvider(api_key="")
+
+    async def run():
+        with pytest.raises(CricketProviderError) as raised:
+            await provider.live_matches()
+        return raised.value
+
+    error = asyncio.run(run())
+    assert error.code == "CRICKET_API_KEY_MISSING"
+
+
+def test_network_failure_is_not_classified_as_quota():
+    async def handler(request):
+        raise httpx.ConnectError("connection failed")
+
+    provider = CricketDataProvider(
+        api_key="secret",
+        base_url="https://example.test/v1",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async def run():
+        with pytest.raises(CricketProviderError) as raised:
+            await provider.live_matches()
+        return raised.value
+
+    error = asyncio.run(run())
+    assert error.code == "CRICKET_NETWORK_ERROR"
+
+
+def test_timeout_is_not_classified_as_quota():
+    async def handler(request):
+        raise httpx.ReadTimeout("request timed out")
+
+    provider = CricketDataProvider(
+        api_key="secret",
+        base_url="https://example.test/v1",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async def run():
+        with pytest.raises(CricketProviderError) as raised:
+            await provider.live_matches()
+        return raised.value
+
+    error = asyncio.run(run())
+    assert error.code == "CRICKET_NETWORK_ERROR"
+
+
+def test_cache_keys_distinguish_modes():
+    from backend.app.services.cricket_provider import _cache_key
+
+    live_key = _cache_key("currentMatches", "secret", {"offset": 0}, "live")
+    demo_key = _cache_key("currentMatches", "secret", {"offset": 0}, "demo")
+    assert live_key != demo_key
+
+
 def test_provider_ttls_match_quota_protection_requirements():
     assert _CACHE_TTLS == {
         "currentMatches": 60,
-        "recentMatches": 300,
+        "matches": 300,
         "match_scorecard": 120,
     }
 

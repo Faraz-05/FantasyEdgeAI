@@ -1,9 +1,12 @@
 import asyncio
 
+import httpx
 import pytest
 
+from backend.app.main import app
 from backend.app.routers import matches as matches_router
 from backend.app.services import cricket_demo
+from backend.app.services.cricket_provider import CricketDataProvider
 
 
 def test_demo_fixture_uses_application_data_directory():
@@ -119,3 +122,60 @@ def test_demo_mode_false_keeps_live_provider_available(monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "false")
     service = matches_router._match_service()
     assert isinstance(service, matches_router.CricketDataProvider)
+
+
+def test_explicit_demo_mode_overrides_live_deployment_default(monkeypatch):
+    monkeypatch.setenv("DEMO_MODE", "false")
+    assert isinstance(
+        matches_router._match_service(matches_router.DataMode.DEMO),
+        matches_router.DemoCricketDataService,
+    )
+
+
+def test_explicit_live_mode_overrides_demo_deployment_default(monkeypatch):
+    monkeypatch.setenv("DEMO_MODE", "true")
+    assert isinstance(
+        matches_router._match_service(matches_router.DataMode.LIVE),
+        CricketDataProvider,
+    )
+
+
+def test_explicit_live_endpoint_uses_provider(monkeypatch):
+    monkeypatch.setenv("DEMO_MODE", "true")
+
+    async def provider_matches(self, offset=0):
+        return {"status": "success", "data": []}
+
+    monkeypatch.setattr(CricketDataProvider, "live_matches", provider_matches)
+    result = asyncio.run(
+        matches_router.live_matches(mode=matches_router.DataMode.LIVE)
+    )
+    assert result["demo"] is False
+    assert result["matches"] == []
+
+
+def test_explicit_demo_endpoint_never_calls_provider(monkeypatch):
+    monkeypatch.setenv("DEMO_MODE", "false")
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("Live provider must not be called in demo mode")
+
+    monkeypatch.setattr(CricketDataProvider, "live_matches", fail_if_called)
+    result = asyncio.run(
+        matches_router.live_matches(mode=matches_router.DataMode.DEMO)
+    )
+    assert result["demo"] is True
+    assert result["source"] == "demo_fixture"
+
+
+def test_invalid_mode_is_rejected():
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            return await client.get("/api/matches/live?mode=invalid")
+
+    response = asyncio.run(run())
+    assert response.status_code == 422

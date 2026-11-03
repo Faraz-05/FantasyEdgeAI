@@ -10,19 +10,26 @@ import httpx
 
 _CACHE_TTLS = {
     "currentMatches": 60,
-    "recentMatches": 300,
+    "matches": 300,
     "match_scorecard": 120,
 }
-_response_cache: dict[tuple[str, tuple[tuple[str, Any], ...], str], tuple[float, dict[str, Any]]] = {}
-_cache_locks: dict[tuple[str, tuple[tuple[str, Any], ...], str], asyncio.Lock] = {}
+_response_cache: dict[tuple[str, tuple[tuple[str, Any], ...], str, str], tuple[float, dict[str, Any]]] = {}
+_cache_locks: dict[tuple[str, tuple[tuple[str, Any], ...], str, str], asyncio.Lock] = {}
 
 
-def _cache_key(endpoint: str, api_key: str, params: dict[str, Any]) -> tuple[str, tuple[tuple[str, Any], ...], str]:
+def _cache_key(
+    endpoint: str,
+    api_key: str,
+    params: dict[str, Any],
+    mode: str = "live",
+) -> tuple[str, tuple[tuple[str, Any], ...], str, str]:
     key_digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-    return endpoint, tuple(sorted(params.items())), key_digest
+    return endpoint, tuple(sorted(params.items())), key_digest, mode
 
 
-def _cached_response(key: tuple[str, tuple[tuple[str, Any], ...], str]) -> dict[str, Any] | None:
+def _cached_response(
+    key: tuple[str, tuple[tuple[str, Any], ...], str, str],
+) -> dict[str, Any] | None:
     cached = _response_cache.get(key)
     if cached is None:
         return None
@@ -34,7 +41,7 @@ def _cached_response(key: tuple[str, tuple[tuple[str, Any], ...], str]) -> dict[
 
 
 def _store_response(
-    key: tuple[str, tuple[tuple[str, Any], ...], str],
+    key: tuple[str, tuple[tuple[str, Any], ...], str, str],
     endpoint: str,
     payload: dict[str, Any],
 ) -> None:
@@ -46,6 +53,7 @@ class CricketProviderError(RuntimeError):
     """Raised when Cricket Data cannot return a usable response."""
 
     message: str
+    code: str | None = None
     endpoint: str | None = None
     http_status: int | None = None
     provider_status: str | None = None
@@ -57,6 +65,8 @@ class CricketProviderError(RuntimeError):
 
     def safe_detail(self) -> dict[str, Any]:
         detail: dict[str, Any] = {"message": self.message}
+        if self.code is not None:
+            detail["code"] = self.code
         if self.http_status is not None:
             detail["provider_http_status"] = self.http_status
         if self.provider_status is not None:
@@ -90,7 +100,9 @@ class CricketDataProvider:
     async def _get(self, endpoint: str, **params: Any) -> dict[str, Any]:
         if not self.api_key:
             raise CricketProviderError(
-                "CRICKET_DATA_API_KEY is not configured", endpoint=endpoint
+                "CRICKET_DATA_API_KEY is not configured",
+                code="CRICKET_API_KEY_MISSING",
+                endpoint=endpoint,
             )
         cache_key = _cache_key(endpoint, self.api_key, params)
         cached = _cached_response(cache_key)
@@ -109,6 +121,7 @@ class CricketDataProvider:
             except httpx.HTTPError as error:
                 raise CricketProviderError(
                     "Cricket Data request failed",
+                    code="CRICKET_NETWORK_ERROR",
                     endpoint=endpoint,
                     provider_message=_safe_text(str(error), self.api_key),
                 ) from error
@@ -120,6 +133,7 @@ class CricketDataProvider:
             except ValueError as error:
                 raise CricketProviderError(
                     "Cricket Data returned invalid JSON",
+                    code="CRICKET_INVALID_RESPONSE",
                     endpoint=endpoint,
                     http_status=response.status_code,
                 ) from error
@@ -127,9 +141,11 @@ class CricketDataProvider:
             provider_status = _safe_text(payload.get("status"), self.api_key) if isinstance(payload, dict) else None
             provider_message = _safe_text(payload.get("message"), self.api_key) if isinstance(payload, dict) else None
             provider_reason = _safe_text(payload.get("reason"), self.api_key) if isinstance(payload, dict) else None
+            quota_exhausted = isinstance(provider_reason, str) and provider_reason.casefold() == "quota"
             if response.is_error:
                 raise CricketProviderError(
                     "Cricket Data HTTP request failed",
+                    code="CRICKET_QUOTA_EXHAUSTED" if quota_exhausted else "CRICKET_HTTP_ERROR",
                     endpoint=endpoint,
                     http_status=response.status_code,
                     provider_status=provider_status,
@@ -139,6 +155,7 @@ class CricketDataProvider:
             if not isinstance(payload, dict) or payload.get("status") not in (None, "success"):
                 raise CricketProviderError(
                     "Cricket Data returned an unsuccessful response",
+                    code="CRICKET_QUOTA_EXHAUSTED" if quota_exhausted else "CRICKET_PROVIDER_ERROR",
                     endpoint=endpoint,
                     http_status=response.status_code,
                     provider_status=provider_status,
@@ -152,7 +169,7 @@ class CricketDataProvider:
         return await self._get("currentMatches", offset=offset)
 
     async def recent_matches(self, offset: int = 0) -> dict[str, Any]:
-        return await self._get("recentMatches", offset=offset)
+        return await self._get("matches", offset=offset)
 
     async def scorecard(self, match_id: str) -> dict[str, Any]:
         return await self._get("match_scorecard", offset=0, id=match_id)

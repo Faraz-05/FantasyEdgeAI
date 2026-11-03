@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import {
   Activity,
@@ -38,6 +38,11 @@ const api = axios.create({
   timeout: 10000
 });
 const ANALYSIS_REQUEST_TIMEOUT_MS = 90000;
+const DATA_MODE_STORAGE_KEY = "fantasyedge-cricket-data-mode";
+const DATA_MODES = {
+  LIVE: "live",
+  DEMO: "demo"
+};
 
 const EMPTY_FORM = {
   player_name: "Your player",
@@ -66,9 +71,10 @@ function App() {
   const [health, setHealth] = useState({ status: "checking", message: "" });
   const [matchTab, setMatchTab] = useState("live");
   const [matches, setMatches] = useState({ live: [], recent: [] });
-  const [demoMode, setDemoMode] = useState(false);
+  const [dataMode, setDataMode] = useState(loadDataMode);
   const [matchState, setMatchState] = useState("loading");
   const [matchError, setMatchError] = useState("");
+  const [quotaError, setQuotaError] = useState(false);
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [players, setPlayers] = useState([]);
   const [playerState, setPlayerState] = useState("idle");
@@ -103,13 +109,17 @@ function App() {
   const [momentumData, setMomentumData] = useState(null);
   const [momentumState, setMomentumState] = useState("idle");
   const [momentumError, setMomentumError] = useState("");
+  const requestGeneration = useRef(0);
 
   useEffect(() => {
     api.get("/health")
       .then(({ data }) => setHealth({ status: "online", message: data.message }))
       .catch(() => setHealth({ status: "offline", message: "Backend unavailable. Start FastAPI on port 8000." }));
-    loadMatches();
   }, []);
+
+  useEffect(() => {
+    loadMatches(dataMode);
+  }, [dataMode]);
 
   useEffect(() => {
     if (matchState !== "done" || selectedMatch) return;
@@ -122,24 +132,79 @@ function App() {
     saveTeam(teamSelection);
   }, [teamSelection]);
 
-  async function loadMatches() {
+  function resetMatchState() {
+    setMatches({ live: [], recent: [] });
     setMatchState("loading");
     setMatchError("");
+    setQuotaError(false);
+    setSelectedMatch(null);
+    setPlayers([]);
+    setPlayerState("idle");
+    setPlayerError("");
+    setSelectedPlayer(null);
+    setForm(EMPTY_FORM);
+    setCalculation(null);
+    setCalculatorState("idle");
+    setAnalysis(null);
+    setAnalysisState("idle");
+    setAnalysisError("");
+    setTeamSelection({
+      matchId: null,
+      selectedPlayerIds: [],
+      captainId: null,
+      viceCaptainId: null,
+      playerRoles: {}
+    });
+    setTeamCalculation(null);
+    setTeamCalculationState("idle");
+    setTeamError("");
+    setComparisonPlayers([null, null]);
+    setComparisonRoles([null, null]);
+    setComparisonResults([null, null]);
+    setComparisonState("idle");
+    setComparisonError("");
+    setComparisonAnalysis(null);
+    setComparisonAnalysisState("idle");
+    setComparisonAnalysisError("");
+    setMomentumData(null);
+    setMomentumState("idle");
+    setMomentumError("");
+  }
+
+  function changeDataMode(nextMode) {
+    if (!Object.values(DATA_MODES).includes(nextMode) || nextMode === dataMode) return;
+    requestGeneration.current += 1;
+    resetMatchState();
+    saveDataMode(nextMode);
+    setDataMode(nextMode);
+  }
+
+  async function loadMatches(requestMode = dataMode) {
+    const generation = ++requestGeneration.current;
+    setMatchState("loading");
+    setMatchError("");
+    setQuotaError(false);
     try {
-      const [live, recent] = await Promise.all([api.get("/matches/live"), api.get("/matches/recent")]);
+      const [live, recent] = await Promise.all([
+        cricketGet("/matches/live", requestMode),
+        cricketGet("/matches/recent", requestMode)
+      ]);
+      if (generation !== requestGeneration.current) return;
       setMatches({ live: live.data.matches || [], recent: recent.data.matches || [] });
-      setDemoMode(live.data.demo === true || recent.data.demo === true);
       setMatchState("done");
     } catch (error) {
+      if (generation !== requestGeneration.current) return;
       setMatchError(readApiError(error, "Unable to load matches."));
+      setQuotaError(getApiErrorCode(error) === "CRICKET_QUOTA_EXHAUSTED");
       setMatchState("error");
     }
   }
 
   async function selectMatch(match) {
+    const generation = ++requestGeneration.current;
     const saved = loadSavedTeam();
     const sameSavedMatch = saved?.matchId === match.id;
-    setSelectedMatch({ ...match, demo: demoMode });
+    setSelectedMatch({ ...match, demo: dataMode === DATA_MODES.DEMO });
     setTeamSelection(sameSavedMatch ? saved : {
       matchId: match.id,
       selectedPlayerIds: [],
@@ -163,15 +228,18 @@ function App() {
     setPlayerError("");
     try {
       const [playersResponse, momentumResponse] = await Promise.all([
-        api.get(`/matches/${match.id}/players`),
-        api.get(`/matches/${match.id}/momentum`)
+        cricketGet(`/matches/${match.id}/players`, dataMode),
+        cricketGet(`/matches/${match.id}/momentum`, dataMode)
       ]);
+      if (generation !== requestGeneration.current) return;
       setPlayers(playersResponse.data.players || []);
       setPlayerState("done");
       setMomentumData(momentumResponse.data);
       setMomentumState("done");
     } catch (error) {
+      if (generation !== requestGeneration.current) return;
       const message = readApiError(error, "Unable to load match data.");
+      setQuotaError(getApiErrorCode(error) === "CRICKET_QUOTA_EXHAUSTED");
       setPlayerError(message);
       setPlayerState("error");
       setMomentumError(message);
@@ -378,17 +446,20 @@ function App() {
       <div className="relative mx-auto w-full max-w-[90rem] px-4 py-4 sm:px-6 sm:py-6 lg:px-10 lg:py-8">
         <Header health={health} activeTab={activeTab} onTabChange={setActiveTab} selectedMatch={selectedMatch} onChangeMatch={() => setActiveTab("overview")} />
         <div className="mt-5">
-          <MatchContextBar match={selectedMatch} demo={selectedMatch?.demo === true} onChangeMatch={() => setActiveTab("overview")} />
+          <MatchContextBar match={selectedMatch} demo={dataMode === DATA_MODES.DEMO} onChangeMatch={() => setActiveTab("overview")} />
         </div>
         {activeTab === "overview" && <OverviewDashboard
           match={selectedMatch}
-          demo={demoMode}
+          dataMode={dataMode}
           data={momentumData}
           onRefresh={loadMatches}
+          onModeChange={changeDataMode}
           matchTab={matchTab}
           onMatchTabChange={setMatchTab}
           matchState={matchState}
           matchError={matchError}
+          quotaError={quotaError}
+          onUseDemo={() => changeDataMode(DATA_MODES.DEMO)}
           matches={visibleMatches}
           onSelectMatch={selectMatch}
           selectedPlayer={selectedPlayer}
@@ -456,13 +527,16 @@ function App() {
 
 function OverviewDashboard({
   match,
-  demo,
+  dataMode,
   data,
   onRefresh,
+  onModeChange,
   matchTab,
   onMatchTabChange,
   matchState,
   matchError,
+  quotaError,
+  onUseDemo,
   matches,
   onSelectMatch,
   selectedPlayer,
@@ -497,10 +571,13 @@ function OverviewDashboard({
       eyebrow="Match intelligence"
       title="Cricket Overview"
       description="A focused summary of the selected match, verified scorecard facts, and player performance."
-      actions={<button onClick={onRefresh} className="overview-refresh-button"><RefreshCw size={16} /> Refresh matches</button>}
+      actions={<div className="flex flex-wrap items-center justify-end gap-2">
+        <DataModeSelector mode={dataMode} onChange={onModeChange} />
+        <button onClick={() => onRefresh(dataMode)} className="overview-refresh-button"><RefreshCw size={16} /> Refresh matches</button>
+      </div>}
     />
 
-    {demo && <div className="overview-demo-note"><ShieldCheck size={18} aria-hidden="true" /><span><strong>Local demo mode</strong> — Durham vs Warwickshire is saved fixture data, not live or current.</span><StatusBadge status="demo" label="Demo · not live" /></div>}
+    {dataMode === DATA_MODES.DEMO && <div className="overview-demo-note"><ShieldCheck size={18} aria-hidden="true" /><span><strong>Local demo mode</strong> — Durham vs Warwickshire is saved fixture data, not live or current.</span><StatusBadge status="demo" label="Demo · not live" /></div>}
 
     {match && <Panel className="overview-score-panel" eyebrow="Selected match" title={match.name || "Unnamed match"} description={`${match.teams?.join(" · ") || "Teams unavailable"} · ${selectedStatus}`}>
       {innings.length > 0
@@ -517,6 +594,15 @@ function OverviewDashboard({
 
     <div className="mt-8 grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
       <Panel eyebrow="Match center" title="Choose a match" icon={Activity}>
+        {quotaError && <div className="mb-4">
+          <ErrorState
+            title="Cricket Data API quota exhausted"
+            message="Live cricket data is temporarily unavailable because the provider confirmed its daily quota is exhausted."
+          />
+          <button onClick={onUseDemo} className="mt-3 w-full rounded-lg bg-lime px-4 py-3 text-sm font-bold text-ink">
+            Switch to Demo Mode
+          </button>
+        </div>}
         <div className="mb-4 flex gap-2 rounded-lg bg-ink/70 p-1">
           {["live", "recent"].map((tab) => <button key={tab} onClick={() => onMatchTabChange(tab)} className={`flex-1 rounded-md px-3 py-2 text-xs font-bold uppercase tracking-wider ${matchTab === tab ? "bg-lime text-ink" : "text-slate-500 hover:text-slate-300"}`}>{tab}</button>)}
         </div>
@@ -524,7 +610,7 @@ function OverviewDashboard({
         {matchState === "error" && <ErrorState message={matchError} />}
         {matchState === "done" && matches.length === 0 && <EmptyState text={`No ${matchTab} matches are available right now.`} />}
         <div className="space-y-3">
-          {matchState === "done" && matches.map((item) => <MatchCard key={item.id} match={item} selected={match?.id === item.id} state={matchTab} demo={demo} onSelect={() => onSelectMatch(item)} />)}
+          {matchState === "done" && matches.map((item) => <MatchCard key={item.id} match={item} selected={match?.id === item.id} state={matchTab} demo={dataMode === DATA_MODES.DEMO} onSelect={() => onSelectMatch(item)} />)}
         </div>
       </Panel>
 
@@ -550,6 +636,27 @@ function OverviewDashboard({
     </section>
     <AnalystSection analysis={analysis} state={analysisState} error={analysisError} canAnalyze={canAnalyze} onAnalyze={onAnalyze} />
   </section>;
+}
+
+function DataModeSelector({ mode, onChange }) {
+  return <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-ink/70 p-1" aria-label="Cricket data source">
+    <button
+      type="button"
+      onClick={() => onChange(DATA_MODES.LIVE)}
+      aria-pressed={mode === DATA_MODES.LIVE}
+      className={`rounded-md px-3 py-2 text-xs font-bold ${mode === DATA_MODES.LIVE ? "bg-lime text-ink" : "text-slate-400 hover:text-slate-200"}`}
+    >
+      Live Cricket Data
+    </button>
+    <button
+      type="button"
+      onClick={() => onChange(DATA_MODES.DEMO)}
+      aria-pressed={mode === DATA_MODES.DEMO}
+      className={`rounded-md px-3 py-2 text-xs font-bold ${mode === DATA_MODES.DEMO ? "bg-amber-300 text-ink" : "text-slate-400 hover:text-slate-200"}`}
+    >
+      Demo Mode
+    </button>
+  </div>;
 }
 
 function OverviewScoreBlock({ score, index, primary }) {
@@ -759,6 +866,33 @@ function PlayerCard({ player, selected, onSelect }) {
 }
 
 function Stat({ label, value }) { return <div className="rounded-md bg-panel px-2 py-2"><span className="block text-slate-600">{label}</span><strong className={value === "—" ? "text-slate-600" : "text-slate-200"}>{value}</strong></div>; }
+
+function loadDataMode() {
+  try {
+    const stored = window.localStorage.getItem(DATA_MODE_STORAGE_KEY);
+    return Object.values(DATA_MODES).includes(stored) ? stored : DATA_MODES.LIVE;
+  } catch {
+    return DATA_MODES.LIVE;
+  }
+}
+
+function saveDataMode(mode) {
+  try {
+    window.localStorage.setItem(DATA_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Persistence is optional when browser storage is unavailable or full.
+  }
+}
+
+function cricketGet(path, mode) {
+  return api.get(path, { params: { mode } });
+}
+
+function getApiErrorCode(error) {
+  const detail = error?.response?.data?.detail;
+  return typeof detail?.code === "string" ? detail.code : null;
+}
+
 function readApiError(error, fallback) {
   const response = error?.response;
   const data = response?.data;
